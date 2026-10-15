@@ -2,12 +2,17 @@
 
 Hold two fingers still on the dashboard for 1.5 seconds to open the native controls:
 
+- **Go to dashboard** loads the saved dashboard URL, from wherever the kiosk is (for
+  example a game the dashboard linked to).
 - **Open launcher** opens another installed Home app, such as Rootless Launcher.
   If none is available, it opens Android Settings.
 - **Android settings** opens the device's Settings app.
 - **Wi-Fi settings** opens Android's Wi-Fi list directly.
-- **Reload dashboard** reloads the current URL.
-- **Back to dashboard** dismisses the controls.
+- **Reload page** reloads the current URL.
+- **Close** dismisses the controls.
+
+When the kiosk is showing a page on another host than the saved dashboard URL and nobody has
+touched the screen for 5 minutes, it goes back to the dashboard by itself.
 
 ## Dashboard URL
 

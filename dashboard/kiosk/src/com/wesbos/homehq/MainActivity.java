@@ -14,6 +14,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
 import android.util.TypedValue;
@@ -32,7 +33,9 @@ import android.widget.TextView;
 /**
  * Full-screen kiosk WebView for the Home HQ wall tablet.
  * - Immersive mode hides the status + navigation bars (true 1280x800).
- * - Controls: hold two fingers still on the screen for 1.5s for launcher/settings/Wi-Fi/reload.
+ * - Controls: hold two fingers still on the screen for 1.5s for dashboard/launcher/settings/Wi-Fi/reload.
+ * - Away from the dashboard (a link it opened, such as a game), the kiosk returns to the saved
+ *   dashboard URL after IDLE_RETURN_MS with no touches.
  * - Offline: a failed page load shows a native screen instead of WebView's error page (which
  *   prints the full URL, including any token in it). With no Wi-Fi it offers Wi-Fi settings.
  * - Remote debugging is OFF unless launched with the debug extra (every app on this device
@@ -52,6 +55,8 @@ public class MainActivity extends Activity {
   static final long EXIT_HOLD_MS = 1500;
   static final long RETRY_MS = 5000;
   static final float EXIT_SLOP_PX = 60;
+  static final long IDLE_RETURN_MS = 5 * 60 * 1000;
+  static final long IDLE_CHECK_MS = 30 * 1000;
 
   private WebView web;
   private final Handler handler = new Handler(Looper.getMainLooper());
@@ -63,6 +68,18 @@ public class MainActivity extends Activity {
   private boolean pageFailed;
   private LinearLayout offline;
   private TextView offlineTitle, offlineText;
+  private long lastTouch = SystemClock.uptimeMillis();
+
+  private final Runnable idleCheck = new Runnable() {
+    @Override
+    public void run() {
+      if (!onDashboard() && SystemClock.uptimeMillis() - lastTouch >= IDLE_RETURN_MS) {
+        Log.i(TAG, "Idle away from the dashboard: returning to it");
+        goToDashboard();
+      }
+      handler.postDelayed(this, IDLE_CHECK_MS);
+    }
+  };
 
   private final Runnable retry = new Runnable() {
     @Override
@@ -78,14 +95,15 @@ public class MainActivity extends Activity {
       Log.i(TAG, "Two-finger hold: opening controls");
       new AlertDialog.Builder(MainActivity.this)
           .setTitle("Home HQ")
-          .setItems(new String[] {"Open launcher", "Android settings", "Wi-Fi settings", "Reload dashboard"},
+          .setItems(new String[] {"Go to dashboard", "Open launcher", "Android settings", "Wi-Fi settings", "Reload page"},
               (dialog, which) -> {
-                if (which == 0) openLauncher();
-                else if (which == 1) startActivity(new Intent(Settings.ACTION_SETTINGS));
-                else if (which == 2) openWifiSettings();
+                if (which == 0) goToDashboard();
+                else if (which == 1) openLauncher();
+                else if (which == 2) startActivity(new Intent(Settings.ACTION_SETTINGS));
+                else if (which == 3) openWifiSettings();
                 else web.reload();
               })
-          .setNegativeButton("Back to dashboard", null).show();
+          .setNegativeButton("Close", null).show();
     }
   };
 
@@ -142,10 +160,14 @@ public class MainActivity extends Activity {
   protected void onResume() {
     super.onResume();
     NavigationService.setDashboardVisible(true);
+    lastTouch = SystemClock.uptimeMillis();
+    handler.removeCallbacks(idleCheck);
+    handler.postDelayed(idleCheck, IDLE_CHECK_MS);
   }
 
   @Override
   protected void onPause() {
+    handler.removeCallbacks(idleCheck); // never navigate while Settings or another app is in front
     cancelExit();
     NavigationService.setDashboardVisible(false);
     super.onPause();
@@ -181,6 +203,19 @@ public class MainActivity extends Activity {
 
   private String savedUrl() {
     return getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_URL, DEFAULT_URL);
+  }
+
+  /** On the dashboard means on the saved URL's host; the page may change its own path or hash. */
+  private boolean onDashboard() {
+    String cur = web.getUrl();
+    if (cur == null) return true;
+    String host = Uri.parse(savedUrl()).getHost();
+    return host != null && host.equalsIgnoreCase(Uri.parse(cur).getHost());
+  }
+
+  private void goToDashboard() {
+    handler.removeCallbacks(retry);
+    web.loadUrl(savedUrl());
   }
 
   private int dp(float v) {
@@ -309,6 +344,7 @@ public class MainActivity extends Activity {
   /** Watches for the two-finger exit hold; all touches still go to the page. */
   @Override
   public boolean dispatchTouchEvent(MotionEvent e) {
+    lastTouch = SystemClock.uptimeMillis();
     switch (e.getActionMasked()) {
       case MotionEvent.ACTION_POINTER_DOWN:
         if (e.getPointerCount() == 2) {
