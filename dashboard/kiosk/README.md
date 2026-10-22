@@ -109,12 +109,13 @@ what to avoid, and how to test on the frame.
 If the dashboard fails to load, Home HQ covers WebView's error page with its own
 screen. The error page would print the full URL, including any token in it.
 
-- **No Wi-Fi:** "Connect to Wi-Fi?" with an **Open Wi-Fi settings** button.
+- **No Wi-Fi yet:** "Connecting to Wi-Fi…", with no button, for the first 2 minutes.
+  Wi-Fi is often still connecting for the first minute after boot.
+- **Still no Wi-Fi after 2 minutes:** "Connect to Wi-Fi?" with an **Open Wi-Fi settings** button.
 - **Wi-Fi is up but the dashboard is unreachable:** "Can't reach the dashboard".
 
-Home HQ keeps retrying every 5 seconds, and the screen disappears once a load
-succeeds. Wi-Fi settings open only when tapped, because Wi-Fi is often still
-connecting for the first minute after boot.
+Home HQ keeps retrying every 5 seconds, and reloads at once when Wi-Fi connects.
+The screen disappears once a load succeeds. Wi-Fi settings open only when tapped.
 
 On frames without a navigation bar (most PF1007L units), set up the navigation service in
 [Frames without Home or Back buttons](#frames-without-home-or-back-buttons) first. Otherwise

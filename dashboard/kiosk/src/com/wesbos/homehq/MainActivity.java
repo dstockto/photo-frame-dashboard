@@ -2,8 +2,11 @@ package com.wesbos.homehq;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
@@ -37,7 +40,9 @@ import android.widget.TextView;
  * - Away from the dashboard (a link it opened, such as a game), the kiosk returns to the saved
  *   dashboard URL after IDLE_RETURN_MS with no touches.
  * - Offline: a failed page load shows a native screen instead of WebView's error page (which
- *   prints the full URL, including any token in it). With no Wi-Fi it offers Wi-Fi settings.
+ *   prints the full URL, including any token in it). With no Wi-Fi it says it's connecting for the
+ *   first WIFI_GRACE_MS (Wi-Fi is often still coming up after boot), then offers Wi-Fi settings.
+ *   It reloads as soon as Wi-Fi connects.
  * - Remote debugging is OFF unless launched with the debug extra (every app on this device
  *   gets root, so the devtools socket should only exist while actively debugging):
  *     adb shell am start -n com.wesbos.homehq/.MainActivity --ez debug true
@@ -54,6 +59,7 @@ public class MainActivity extends Activity {
   static final String PREF_URL = "url";
   static final long EXIT_HOLD_MS = 1500;
   static final long RETRY_MS = 5000;
+  static final long WIFI_GRACE_MS = 2 * 60 * 1000;
   static final float EXIT_SLOP_PX = 60;
   static final long IDLE_RETURN_MS = 5 * 60 * 1000;
   static final long IDLE_CHECK_MS = 30 * 1000;
@@ -66,6 +72,7 @@ public class MainActivity extends Activity {
   private boolean exitArmed;
   private String retryUrl;
   private boolean pageFailed;
+  private long offlineSince; // uptime when the offline screen first showed, 0 when hidden
   private LinearLayout offline;
   private TextView offlineTitle, offlineText;
   private long lastTouch = SystemClock.uptimeMillis();
@@ -85,6 +92,17 @@ public class MainActivity extends Activity {
     @Override
     public void run() {
       if (retryUrl != null) web.loadUrl(retryUrl);
+    }
+  };
+
+  // Reload the moment Wi-Fi connects instead of waiting for the next retry.
+  private final BroadcastReceiver connectivity = new BroadcastReceiver() {
+    @Override
+    public void onReceive(Context context, Intent intent) {
+      if (offlineSince == 0 || retryUrl == null || !wifiConnected()) return;
+      Log.i(TAG, "Wi-Fi connected: retrying now");
+      handler.removeCallbacks(retry);
+      web.loadUrl(retryUrl);
     }
   };
 
@@ -133,7 +151,10 @@ public class MainActivity extends Activity {
 
       @Override
       public void onPageFinished(WebView view, String url) {
-        if (!pageFailed) offline.setVisibility(View.GONE);
+        if (!pageFailed) {
+          offline.setVisibility(View.GONE);
+          offlineSince = 0;
+        }
       }
 
       @Override
@@ -151,6 +172,9 @@ public class MainActivity extends Activity {
     root.addView(web);
     root.addView(buildOffline());
     setContentView(root);
+    @SuppressWarnings("deprecation")
+    String action = ConnectivityManager.CONNECTIVITY_ACTION;
+    registerReceiver(connectivity, new IntentFilter(action));
 
     String url = urlFrom(getIntent());
     web.loadUrl(url != null ? url : savedUrl());
@@ -222,6 +246,8 @@ public class MainActivity extends Activity {
     return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
   }
 
+  private Button offlineWifi;
+
   private View buildOffline() {
     offline = new LinearLayout(this);
     offline.setOrientation(LinearLayout.VERTICAL);
@@ -243,12 +269,12 @@ public class MainActivity extends Activity {
     offlineText.setPadding(dp(24), dp(12), dp(24), dp(28));
     offline.addView(offlineText);
 
-    Button wifi = new Button(this);
-    wifi.setText("Open Wi-Fi settings");
-    wifi.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-    wifi.setPadding(dp(32), dp(16), dp(32), dp(16));
-    wifi.setOnClickListener(v -> openWifiSettings());
-    offline.addView(wifi, new LinearLayout.LayoutParams(
+    offlineWifi = new Button(this);
+    offlineWifi.setText("Open Wi-Fi settings");
+    offlineWifi.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+    offlineWifi.setPadding(dp(32), dp(16), dp(32), dp(16));
+    offlineWifi.setOnClickListener(v -> openWifiSettings());
+    offline.addView(offlineWifi, new LinearLayout.LayoutParams(
         LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
     return offline;
   }
@@ -261,13 +287,20 @@ public class MainActivity extends Activity {
   }
 
   private void showOffline() {
-    if (wifiConnected()) {
+    long now = SystemClock.uptimeMillis();
+    if (offlineSince == 0) offlineSince = now;
+    boolean wifi = wifiConnected();
+    if (wifi) {
       offlineTitle.setText("Can't reach the dashboard");
       offlineText.setText("Wi-Fi is connected. Retrying every few seconds.");
+    } else if (now - offlineSince < WIFI_GRACE_MS) {
+      offlineTitle.setText("Connecting to Wi-Fi\u2026");
+      offlineText.setText("The dashboard appears once the frame is on Wi-Fi.");
     } else {
       offlineTitle.setText("Connect to Wi-Fi?");
       offlineText.setText("The frame isn't on Wi-Fi. The dashboard comes back by itself once it is.");
     }
+    offlineWifi.setVisibility(wifi || now - offlineSince >= WIFI_GRACE_MS ? View.VISIBLE : View.GONE);
     offline.setVisibility(View.VISIBLE);
   }
 
@@ -320,6 +353,7 @@ public class MainActivity extends Activity {
   @Override
   protected void onDestroy() {
     handler.removeCallbacksAndMessages(null);
+    unregisterReceiver(connectivity);
     if (web != null) web.destroy();
     super.onDestroy();
   }
